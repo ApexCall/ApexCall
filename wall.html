@@ -1009,31 +1009,6 @@
         }
 
 
-        #soundUnlockBanner {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            z-index: 9999;
-            background: #ffcc00;
-            color: #1a1a1a;
-            font-weight: 700;
-            text-align: center;
-            padding: 10px;
-            cursor: pointer;
-            font-size: 16px;
-            animation: soundBannerPulse 2s infinite;
-        }
-
-        #soundUnlockBanner.hidden {
-            display: none;
-        }
-
-        @keyframes soundBannerPulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.7; }
-        }
-
     </style>
 
 </head>
@@ -1047,10 +1022,6 @@
     src="celebration-start.mp3"
     preload="auto"
 ></audio>
-
-<div id="soundUnlockBanner" onclick="unlockCelebrationAudio()">
-    🔊 Click anywhere to enable celebration sound
-</div>
 
 <div id="wall">
 
@@ -1472,9 +1443,7 @@ async function setupRealtime() {
         const playback = sound.play();
 
         if (playback && typeof playback.then === "function") {
-            playback.then(function () {
-                hideSoundUnlockBanner();
-            }).catch(function (error) {
+            playback.catch(function (error) {
                 console.warn(
                     "Celebration sound could not play. The browser may require interaction first.",
                     error
@@ -1509,6 +1478,17 @@ async function setupRealtime() {
 
         clearInterval(
             confettiTimer
+        );
+
+
+        /*
+        Fire a desktop notification right away so the agent's name is
+        visible even if this tab is covered by another window (e.g.
+        YouTube playing in front of the wall).
+        */
+
+        showDesktopNotification(
+            data
         );
 
 
@@ -2231,15 +2211,12 @@ async function setupRealtime() {
     Some browsers block ANY audio playback (even later ones triggered
     from JS/websocket events) until the page has seen at least one
     real user interaction. Unlock audio on the very first click/tap/
-    key press so celebration sounds are free to play afterward.
+    key press so celebration sounds are free to play afterward. This
+    same first interaction is also used to ask for desktop-notification
+    permission, silently, with no visible banner.
     */
 
-    function hideSoundUnlockBanner() {
-        const banner = document.getElementById("soundUnlockBanner");
-        if (banner) {
-            banner.classList.add("hidden");
-        }
-    }
+    const NOTIF_LOG_PREFIX = "[ApexCall notifications]";
 
     function unlockCelebrationAudio() {
 
@@ -2251,13 +2228,95 @@ async function setupRealtime() {
             baseSound.play().then(function () {
                 baseSound.pause();
                 baseSound.currentTime = 0;
-                hideSoundUnlockBanner();
-            }).catch(function () {});
+            }).catch(function (error) {
+                console.warn(NOTIF_LOG_PREFIX, "audio unlock failed:", error);
+            });
         }
+
+        requestNotificationPermission();
 
         document.removeEventListener("click", unlockCelebrationAudio);
         document.removeEventListener("keydown", unlockCelebrationAudio);
         document.removeEventListener("touchstart", unlockCelebrationAudio);
+
+    }
+
+    /*
+    Desktop notifications so the agent's name is visible even when the
+    Wall PC's browser is showing a different window/tab (e.g. YouTube)
+    on top of wall.html. Notifications from the OS render above every
+    other window regardless of which one currently has focus.
+
+    Note: even when Notification.permission is "granted" in Chrome,
+    Windows itself can still silently swallow the notification if
+    Windows Settings > System > Notifications has Chrome turned off,
+    or if Focus Assist / Do Not Disturb is on. If notifications ever
+    stop appearing, that's the first place to check. Open the browser
+    Console (F12) and look for "[ApexCall notifications]" log lines
+    to see exactly what's happening at each step.
+    */
+
+    function requestNotificationPermission() {
+
+        if (!("Notification" in window)) {
+            console.warn(NOTIF_LOG_PREFIX, "Notification API not supported in this browser.");
+            return;
+        }
+
+        if (Notification.permission === "default") {
+            Notification.requestPermission().then(function (result) {
+                console.log(NOTIF_LOG_PREFIX, "permission result:", result);
+            });
+        }
+
+    }
+
+    function showDesktopNotification(data) {
+
+        if (!("Notification" in window)) {
+            return;
+        }
+
+        if (Notification.permission !== "granted") {
+            console.warn(NOTIF_LOG_PREFIX, "skipped: permission is", Notification.permission);
+            return;
+        }
+
+        const name = (data && data.name) || "Unknown";
+        const achievementLabel = (data && data.achievement) || "Achievement";
+
+        let body = achievementLabel;
+
+        if (data && Number(data.amount) > 0) {
+            body += " — $" + Number(data.amount).toLocaleString("en-US");
+        }
+
+        try {
+
+            const notification = new Notification(
+                "🎉 " + name,
+                {
+                    body: body,
+                    tag: "apexcall-celebration-" + Date.now(),
+                    requireInteraction: false
+                }
+            );
+
+            notification.onclick = function () {
+                window.focus();
+                notification.close();
+            };
+
+            setTimeout(
+                function () {
+                    notification.close();
+                },
+                10000
+            );
+
+        } catch (error) {
+            console.error(NOTIF_LOG_PREFIX, "failed to create notification:", error);
+        }
 
     }
 
